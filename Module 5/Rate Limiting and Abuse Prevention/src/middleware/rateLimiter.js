@@ -1,26 +1,30 @@
 'use strict';
-// middleware/rateLimiter.js
-//
-// YOUR TASK: replace this pass-through with a real rate limiter.
-//
-// Right now this middleware lets EVERY request through, so the login route can be
-// brute-forced without limit. Build a strict limiter with `express-rate-limit`
-// (already in package.json) that is exported as the middleware used by the three
-// auth routes in src/routes/auth.js.
-//
-// Requirements (checked by the tests):
-//   - windowMs: 15 minutes
-//   - max: 5 attempts per window per IP
-//   - after the limit, respond with 429 and a `Retry-After` header
-//   - standardHeaders: true, legacyHeaders: false
-//   - (recommended) skipSuccessfulRequests: true so only FAILED attempts count
-//
-// Also add a COMMENT explaining how a Redis-backed store (rate-limit-redis) would
-// replace the default in-memory store in a multi-instance deployment, and why the
-// in-memory store is not enough when several instances run behind a load balancer.
-//
-// Hint: express-rate-limit returns a middleware function — export it directly:
-//   const rateLimit = require('express-rate-limit');
-//   module.exports = rateLimit({ ...options });
 
-module.exports = (req, res, next) => next(); // TODO: replace this stub
+const rateLimit = require('express-rate-limit');
+
+// In a multi-instance deployment, the default in-memory store is not enough because
+// each app instance keeps its own request counter. Behind a load balancer, the same
+// client may be spread across multiple nodes, so each node sees its own low count and
+// the client can bypass the real limit. A Redis-backed store such as `rate-limit-redis`
+// shares counters across instances, so all nodes enforce one consistent rate limit.
+module.exports = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  handler: (req, res) => {
+    const retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((req.rateLimit.resetTime - Date.now()) / 1000)
+    );
+
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.status(429).json({
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many requests. Please try again later.'
+      }
+    });
+  }
+});
